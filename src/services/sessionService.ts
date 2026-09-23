@@ -20,6 +20,8 @@ import { createGameCode, createId } from '../utils/id.js'
 const TIMED_STATUSES: TimedSessionStatus[] = ['countdown', 'question_open', 'show_answer', 'leaderboard']
 
 export class SessionService {
+  private readonly sessionQueues = new Map<string, Promise<void>>()
+
   constructor(private readonly repository: QuizRepository) {}
 
   async createSession(templateId: string) {
@@ -59,8 +61,12 @@ export class SessionService {
 
     for (const session of sessions) {
       if (!session.players.some((player) => player.connected)) continue
-      session.players.forEach((player) => { player.connected = false })
-      await this.touch(session)
+      await this.withSessionLock(session.code, async () => {
+        const snapshot = await this.requireSnapshotUnlocked(session.code)
+        if (!snapshot.session.players.some((player) => player.connected)) return
+        snapshot.session.players.forEach((player) => { player.connected = false })
+        await this.touch(snapshot.session)
+      })
     }
   }
 
@@ -91,6 +97,10 @@ export class SessionService {
   }
 
   async getSnapshotByCode(code: string): Promise<SessionSnapshot | null> {
+    return this.withSessionLock(code, () => this.getSnapshotByCodeUnlocked(code))
+  }
+
+  private async getSnapshotByCodeUnlocked(code: string): Promise<SessionSnapshot | null> {
     const session = await this.repository.getSessionByCode(code)
     if (!session) return null
 
@@ -109,7 +119,11 @@ export class SessionService {
   }
 
   async joinSession(code: string, name: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.joinSessionUnlocked(code, name))
+  }
+
+  private async joinSessionUnlocked(code: string, name: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session } = snapshot
 
     if (session.status !== 'lobby_open') throw new Error('Lobby is not open')
@@ -135,7 +149,11 @@ export class SessionService {
   }
 
   async setPlayerConnection(code: string, playerId: string, connected: boolean) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.setPlayerConnectionUnlocked(code, playerId, connected))
+  }
+
+  private async setPlayerConnectionUnlocked(code: string, playerId: string, connected: boolean) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const player = snapshot.session.players.find((candidate) => candidate.id === playerId)
     if (!player || player.connected === connected) return snapshot
 
@@ -145,7 +163,11 @@ export class SessionService {
   }
 
   async setLobbyStatus(code: string, status: 'lobby_open' | 'lobby_locked') {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.setLobbyStatusUnlocked(code, status))
+  }
+
+  private async setLobbyStatusUnlocked(code: string, status: 'lobby_open' | 'lobby_locked') {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     if (!['lobby_open', 'lobby_locked'].includes(snapshot.session.status)) {
       throw new Error('Lobby can only be changed before the game starts')
     }
@@ -156,12 +178,18 @@ export class SessionService {
   }
 
   async setStatus(code: string, status: Extract<SessionStatus, 'lobby_open' | 'lobby_locked' | 'finished'>) {
-    if (status === 'finished') return this.finishSession(code)
-    return this.setLobbyStatus(code, status)
+    return this.withSessionLock(code, () => {
+      if (status === 'finished') return this.finishSessionUnlocked(code)
+      return this.setLobbyStatusUnlocked(code, status)
+    })
   }
 
   async startSession(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.startSessionUnlocked(code))
+  }
+
+  private async startSessionUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session, template } = snapshot
 
     if (!['lobby_open', 'lobby_locked'].includes(session.status)) throw new Error('Game has already started')
@@ -175,7 +203,11 @@ export class SessionService {
   }
 
   async openNextQuestion(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.openNextQuestionUnlocked(code))
+  }
+
+  private async openNextQuestionUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session, template } = snapshot
 
     if (!['show_answer', 'leaderboard', 'question_closed'].includes(session.status)) {
@@ -183,7 +215,7 @@ export class SessionService {
     }
 
     const nextIndex = session.currentQuestionIndex === null ? 0 : session.currentQuestionIndex + 1
-    if (!template.questions[nextIndex]) return this.finishSession(code)
+    if (!template.questions[nextIndex]) return this.finishSessionUnlocked(code)
 
     session.currentQuestionIndex = nextIndex
     this.enterCountdown(session, Date.now())
@@ -192,11 +224,15 @@ export class SessionService {
   }
 
   async closeQuestion(code: string) {
-    return this.showAnswer(code)
+    return this.withSessionLock(code, () => this.showAnswerUnlocked(code))
   }
 
   async showAnswer(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.showAnswerUnlocked(code))
+  }
+
+  private async showAnswerUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     if (!['question_open', 'question_closed'].includes(snapshot.session.status)) {
       throw new Error('There is no open question to reveal')
     }
@@ -207,7 +243,11 @@ export class SessionService {
   }
 
   async showAnswerIfCurrentQuestion(code: string, questionId: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.showAnswerIfCurrentQuestionUnlocked(code, questionId))
+  }
+
+  private async showAnswerIfCurrentQuestionUnlocked(code: string, questionId: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const currentQuestion = getCurrentQuestion(snapshot.template, snapshot.session)
 
     if (snapshot.session.status !== 'question_open' || currentQuestion?.id !== questionId) return snapshot
@@ -218,7 +258,11 @@ export class SessionService {
   }
 
   async showAnswerIfEveryoneAnswered(code: string, questionId: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.showAnswerIfEveryoneAnsweredUnlocked(code, questionId))
+  }
+
+  private async showAnswerIfEveryoneAnsweredUnlocked(code: string, questionId: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const currentQuestion = getCurrentQuestion(snapshot.template, snapshot.session)
     if (snapshot.session.status !== 'question_open' || currentQuestion?.id !== questionId) return snapshot
 
@@ -240,7 +284,11 @@ export class SessionService {
   }
 
   async pauseSession(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.pauseSessionUnlocked(code))
+  }
+
+  private async pauseSessionUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session } = snapshot
     if (!isTimedStatus(session.status)) throw new Error('The game cannot be paused in the current phase')
 
@@ -253,7 +301,11 @@ export class SessionService {
   }
 
   async resumeSession(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.resumeSessionUnlocked(code))
+  }
+
+  private async resumeSessionUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session } = snapshot
     if (session.status !== 'paused' || !session.pausedPhase) throw new Error('The game is not paused')
 
@@ -266,7 +318,11 @@ export class SessionService {
   }
 
   async skipPhase(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.skipPhaseUnlocked(code))
+  }
+
+  private async skipPhaseUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     if (!isTimedStatus(snapshot.session.status)) throw new Error('There is no timed phase to skip')
 
     this.advanceOnePhase(snapshot, Date.now())
@@ -275,7 +331,11 @@ export class SessionService {
   }
 
   async finishSession(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.finishSessionUnlocked(code))
+  }
+
+  private async finishSessionUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     snapshot.session.status = 'finished'
     snapshot.session.phaseEndsAt = null
     snapshot.session.pausedPhase = null
@@ -285,7 +345,11 @@ export class SessionService {
   }
 
   async advanceTimedPhases(code: string) {
-    const snapshot = await this.requireSnapshot(code)
+    return this.withSessionLock(code, () => this.advanceTimedPhasesUnlocked(code))
+  }
+
+  private async advanceTimedPhasesUnlocked(code: string) {
+    const snapshot = await this.requireSnapshotUnlocked(code)
     const { session } = snapshot
     let changed = this.ensureTimedDeadline(session)
     let safety = 0
@@ -302,7 +366,11 @@ export class SessionService {
   }
 
   async submitAnswer(code: string, playerId: string, optionId: string) {
-    const { snapshot } = await this.advanceTimedPhases(code)
+    return this.withSessionLock(code, () => this.submitAnswerUnlocked(code, playerId, optionId))
+  }
+
+  private async submitAnswerUnlocked(code: string, playerId: string, optionId: string) {
+    const { snapshot } = await this.advanceTimedPhasesUnlocked(code)
     const { session, template } = snapshot
 
     if (session.status !== 'question_open') throw new Error('Question is not open')
@@ -344,6 +412,19 @@ export class SessionService {
 
     player.score += score
     session.answers.push(answer)
+
+    const participantIds = session.questionPlayerIds?.length
+      ? session.questionPlayerIds
+      : session.players.map((candidate) => candidate.id)
+    const answeredPlayerIds = new Set(
+      session.answers
+        .filter((candidate) => candidate.questionId === question.id)
+        .map((candidate) => candidate.playerId)
+    )
+    if (participantIds.length > 0 && participantIds.every((participantId) => answeredPlayerIds.has(participantId))) {
+      this.enterAnswerReveal(session, answeredAtMs)
+    }
+
     await this.touch(session)
     return { snapshot, answer }
   }
@@ -421,10 +502,31 @@ export class SessionService {
     throw new Error('Could not create unique game code')
   }
 
-  private async requireSnapshot(code: string) {
-    const snapshot = await this.getSnapshotByCode(code)
+  private async requireSnapshotUnlocked(code: string) {
+    const snapshot = await this.getSnapshotByCodeUnlocked(code)
     if (!snapshot) throw new Error('Session not found')
     return snapshot
+  }
+
+  private async withSessionLock<T>(code: string, action: () => Promise<T>): Promise<T> {
+    const normalizedCode = code.trim().toUpperCase()
+    const previous = this.sessionQueues.get(normalizedCode) || Promise.resolve()
+    let releaseCurrent!: () => void
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve
+    })
+
+    this.sessionQueues.set(normalizedCode, current)
+    await previous
+
+    try {
+      return await action()
+    } finally {
+      releaseCurrent()
+      if (this.sessionQueues.get(normalizedCode) === current) {
+        this.sessionQueues.delete(normalizedCode)
+      }
+    }
   }
 
   private async touch(session: LiveSession) {

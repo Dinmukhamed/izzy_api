@@ -121,7 +121,6 @@ export function createRealtimeServer(httpServer: HttpServer, deps: RealtimeDeps)
     socket.on('player:answer', async (payload: { code: string; playerId: string; optionId: string }, ack?: ClientAck) => {
       await safely(ack, async () => {
         const { answer } = await deps.sessionService.submitAnswer(payload.code, payload.playerId, payload.optionId)
-        await deps.sessionService.showAnswerIfEveryoneAnswered(payload.code, answer.questionId)
         await emitSessionState(payload.code)
         return answer
       })
