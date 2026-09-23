@@ -22,7 +22,7 @@ const { app, demoTemplate } = await buildApp({
 
 try {
   await app.listen({ port, host })
-  app.log.info({ templateId: demoTemplate.id, adminToken }, 'Izzy API is ready')
+  app.log.info({ templateId: demoTemplate.id }, 'Izzy API is ready')
 } catch (error) {
   app.log.error(error)
   process.exit(1)
