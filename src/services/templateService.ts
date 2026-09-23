@@ -43,6 +43,23 @@ export class TemplateService {
     return this.repository.updateTemplate(template)
   }
 
+  async deleteTemplate(id: string) {
+    const template = await this.repository.getTemplate(id)
+    if (!template) throw new Error('Template not found')
+
+    const sessions = await this.repository.listSessions()
+    const relatedSessions = sessions.filter((session) => session.templateId === id)
+
+    for (const session of relatedSessions) {
+      if (session.templateSnapshot) continue
+
+      session.templateSnapshot = cloneTemplate(template)
+      await this.repository.updateSession(session)
+    }
+
+    await this.repository.deleteTemplate(id)
+  }
+
   private buildTemplate(input: CreateTemplateInput | UpdateTemplateInput, id: string = createId(), createdAt?: string) {
     const now = new Date().toISOString()
     const template: GameTemplate = {
@@ -79,4 +96,8 @@ export class TemplateService {
 
     return template
   }
+}
+
+function cloneTemplate(template: GameTemplate) {
+  return JSON.parse(JSON.stringify(template)) as GameTemplate
 }

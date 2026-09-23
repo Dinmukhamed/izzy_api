@@ -13,8 +13,8 @@ export const questionSchema = z.object({
       url: z.string().min(1),
     })
     .optional(),
-  options: z.array(answerOptionSchema).min(2).max(8),
-  correctOptionIndex: z.number().int().min(0),
+  options: z.array(answerOptionSchema).length(4, 'A question must have exactly four answers'),
+  correctOptionIndex: z.number().int().min(0).max(3),
   durationMs: z.number().int().min(5000).max(120000).default(20000),
   points: z.number().int().min(100).max(5000).default(1000),
 })

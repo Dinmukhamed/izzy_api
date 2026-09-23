@@ -13,6 +13,7 @@ export type AppConfig = {
   adminToken: string
   corsOrigins: string[]
   dataDir?: string
+  publicBaseUrl?: string
 }
 
 export async function buildApp(config: AppConfig) {
@@ -21,7 +22,15 @@ export async function buildApp(config: AppConfig) {
   })
 
   await app.register(cors, {
-    origin: config.corsOrigins,
+    origin: (origin, callback) => {
+      const isConfiguredOrigin = !origin || config.corsOrigins.includes(origin)
+      const isLocalDevelopmentOrigin = Boolean(
+        origin && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      )
+
+      callback(null, isConfiguredOrigin || isLocalDevelopmentOrigin)
+    },
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
   })
 
@@ -47,10 +56,13 @@ export async function buildApp(config: AppConfig) {
     templateService,
     sessionService,
     uploadDir: join(dataDir, 'uploads'),
+    publicBaseUrl: config.publicBaseUrl,
     notifySessionChange: realtime.emitSessionState,
   })
 
   const demoTemplate = await seedDemoTemplate(templateService)
+  await sessionService.resetPlayerConnections()
+  await realtime.resumeSessions()
 
   return {
     app,

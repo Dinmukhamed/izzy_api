@@ -7,6 +7,7 @@ const port = Number(process.env.PORT || 4010)
 const host = process.env.HOST || '127.0.0.1'
 const adminToken = process.env.ADMIN_TOKEN || 'dev-admin-token'
 const dataDir = process.env.DATA_DIR || 'data'
+const publicBaseUrl = process.env.PUBLIC_BASE_URL
 const corsOrigins = (process.env.CORS_ORIGIN || 'http://127.0.0.1:5173,http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -16,6 +17,7 @@ const { app, demoTemplate } = await buildApp({
   adminToken,
   corsOrigins,
   dataDir,
+  publicBaseUrl,
 })
 
 try {

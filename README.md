@@ -22,6 +22,17 @@ Default admin token in development: `dev-admin-token`
 
 Local media uploads are stored in `data/uploads`.
 
+Production env example behind nginx:
+
+```env
+PORT=4010
+HOST=127.0.0.1
+ADMIN_TOKEN=change-me
+CORS_ORIGIN=https://izzyquiz.kz,https://www.izzyquiz.kz
+DATA_DIR=data
+PUBLIC_BASE_URL=https://izzyquiz.kz
+```
+
 ## Main HTTP endpoints
 
 Admin endpoints need:

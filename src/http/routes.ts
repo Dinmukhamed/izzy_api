@@ -21,6 +21,7 @@ type RouteDeps = {
   templateService: TemplateService
   sessionService: SessionService
   uploadDir: string
+  publicBaseUrl?: string
   notifySessionChange?: (code: string) => Promise<void> | void
 }
 
@@ -79,6 +80,17 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
     }
   })
 
+  app.delete('/admin/templates/:id', { preHandler: adminGuard }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string }
+      await deps.templateService.deleteTemplate(id)
+
+      return reply.code(204).send()
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.post('/admin/uploads', { preHandler: adminGuard }, async (request, reply) => {
     try {
       const file = await request.file()
@@ -95,9 +107,10 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
 
       await mkdir(deps.uploadDir, { recursive: true })
       await writeFile(join(deps.uploadDir, fileName), fileBuffer)
+      const publicBaseUrl = deps.publicBaseUrl || `${request.protocol}://${request.headers.host}`
 
       return reply.code(201).send({
-        url: `${request.protocol}://${request.headers.host}/uploads/${fileName}`,
+        url: `${publicBaseUrl.replace(/\/$/, '')}/uploads/${fileName}`,
         filename: file.filename,
         mimetype: file.mimetype,
         size: fileBuffer.length,
@@ -135,19 +148,25 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
     }
   })
 
+  app.get('/admin/sessions', { preHandler: adminGuard }, async () =>
+    deps.sessionService.listSessionSummaries()
+  )
+
   app.get('/admin/sessions/:code', { preHandler: adminGuard }, async (request, reply) => {
     const { code } = request.params as { code: string }
-    const snapshot = await deps.sessionService.getSnapshotByCode(code)
-
-    if (!snapshot) return reply.code(404).send({ error: 'Session not found' })
-
-    return toHostSessionState(snapshot.template, snapshot.session)
+    try {
+      const { snapshot, changed } = await deps.sessionService.advanceTimedPhases(code)
+      if (changed) await notify(code)
+      return toHostSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error, 404)
+    }
   })
 
   app.post('/admin/sessions/:code/open-lobby', { preHandler: adminGuard }, async (request, reply) => {
     try {
       const { code } = request.params as { code: string }
-      const snapshot = await deps.sessionService.setStatus(code, 'lobby_open')
+      const snapshot = await deps.sessionService.setLobbyStatus(code, 'lobby_open')
       await notify(code)
 
       return toHostSessionState(snapshot.template, snapshot.session)
@@ -159,7 +178,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
   app.post('/admin/sessions/:code/lock-lobby', { preHandler: adminGuard }, async (request, reply) => {
     try {
       const { code } = request.params as { code: string }
-      const snapshot = await deps.sessionService.setStatus(code, 'lobby_locked')
+      const snapshot = await deps.sessionService.setLobbyStatus(code, 'lobby_locked')
       await notify(code)
 
       return toHostSessionState(snapshot.template, snapshot.session)
@@ -216,10 +235,43 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
     }
   })
 
+  app.post('/admin/sessions/:code/skip-phase', { preHandler: adminGuard }, async (request, reply) => {
+    try {
+      const { code } = request.params as { code: string }
+      const snapshot = await deps.sessionService.skipPhase(code)
+      await notify(code)
+      return toHostSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/admin/sessions/:code/pause', { preHandler: adminGuard }, async (request, reply) => {
+    try {
+      const { code } = request.params as { code: string }
+      const snapshot = await deps.sessionService.pauseSession(code)
+      await notify(code)
+      return toHostSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.post('/admin/sessions/:code/resume', { preHandler: adminGuard }, async (request, reply) => {
+    try {
+      const { code } = request.params as { code: string }
+      const snapshot = await deps.sessionService.resumeSession(code)
+      await notify(code)
+      return toHostSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.post('/admin/sessions/:code/finish', { preHandler: adminGuard }, async (request, reply) => {
     try {
       const { code } = request.params as { code: string }
-      const snapshot = await deps.sessionService.setStatus(code, 'finished')
+      const snapshot = await deps.sessionService.finishSession(code)
       await notify(code)
 
       return toHostSessionState(snapshot.template, snapshot.session)
@@ -230,11 +282,13 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
 
   app.get('/sessions/:code', async (request, reply) => {
     const { code } = request.params as { code: string }
-    const snapshot = await deps.sessionService.getSnapshotByCode(code)
-
-    if (!snapshot) return reply.code(404).send({ error: 'Session not found' })
-
-    return toPlayerSessionState(snapshot.template, snapshot.session)
+    try {
+      const { snapshot, changed } = await deps.sessionService.advanceTimedPhases(code)
+      if (changed) await notify(code)
+      return toPlayerSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error, 404)
+    }
   })
 
   app.post('/sessions/:code/join', async (request, reply) => {

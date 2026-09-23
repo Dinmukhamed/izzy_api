@@ -8,10 +8,15 @@ export type SessionStatus =
   | 'lobby_open'
   | 'lobby_locked'
   | 'in_progress'
+  | 'countdown'
   | 'question_open'
   | 'question_closed'
   | 'show_answer'
+  | 'leaderboard'
+  | 'paused'
   | 'finished'
+
+export type TimedSessionStatus = 'countdown' | 'question_open' | 'show_answer' | 'leaderboard'
 
 export type Media = {
   type: Exclude<QuestionKind, 'text'>
@@ -66,11 +71,17 @@ export type LiveSession = {
   id: Id
   code: string
   templateId: Id
+  templateSnapshot?: GameTemplate
   status: SessionStatus
   players: Player[]
   answers: PlayerAnswer[]
   currentQuestionIndex: number | null
   questionStartedAt: string | null
+  phaseEndsAt?: string | null
+  pausedPhase?: TimedSessionStatus | null
+  pausedRemainingMs?: number | null
+  questionPlayerIds?: Id[]
+  stateVersion?: number
   createdAt: string
   updatedAt: string
 }

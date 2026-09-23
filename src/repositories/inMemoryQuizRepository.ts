@@ -25,6 +25,10 @@ export class InMemoryQuizRepository implements QuizRepository {
     return template
   }
 
+  async deleteTemplate(id: string) {
+    this.templates.delete(id)
+  }
+
   async listSessions() {
     return Array.from(this.sessions.values())
   }

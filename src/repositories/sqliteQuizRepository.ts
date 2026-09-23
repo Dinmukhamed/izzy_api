@@ -62,6 +62,10 @@ export class SqliteQuizRepository implements QuizRepository {
     return template
   }
 
+  async deleteTemplate(id: string) {
+    this.database.prepare('DELETE FROM templates WHERE id = ?').run(id)
+  }
+
   async listSessions() {
     const rows = this.database
       .prepare('SELECT payload FROM sessions ORDER BY updated_at DESC')

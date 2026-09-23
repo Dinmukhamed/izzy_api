@@ -5,6 +5,7 @@ export type QuizRepository = {
   getTemplate(id: string): Promise<GameTemplate | null>
   createTemplate(template: GameTemplate): Promise<GameTemplate>
   updateTemplate(template: GameTemplate): Promise<GameTemplate>
+  deleteTemplate(id: string): Promise<void>
 
   listSessions(): Promise<LiveSession[]>
   getSessionByCode(code: string): Promise<LiveSession | null>

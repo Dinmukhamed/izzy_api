@@ -51,6 +51,12 @@ export class JsonQuizRepository implements QuizRepository {
     return template
   }
 
+  async deleteTemplate(id: string) {
+    const database = await this.load()
+    database.templates = database.templates.filter((template) => template.id !== id)
+    await this.persist()
+  }
+
   async listSessions() {
     const database = await this.load()
 
