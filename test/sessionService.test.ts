@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,7 +37,9 @@ test('keeps every answer when 50 players answer concurrently through a full game
     const question = template.questions[questionIndex]
     assert.ok(question)
     await Promise.all(
-      playerIds.map((playerId) => service.submitAnswer(session.code, playerId, question.correctOptionId))
+      joins.map(({ playerToken }) =>
+        service.submitAnswer(session.code, playerToken, question.correctOptionId, randomUUID())
+      )
     )
 
     const afterAnswers = await service.getSnapshotByCode(session.code)
@@ -68,20 +71,25 @@ test('serializes duplicate answers and connection changes', async () => {
   await repository.createTemplate(template)
   const service = new SessionService(repository)
   const session = await service.createSession(template.id)
-  const { player } = await service.joinSession(session.code, 'Player')
+  const { player, playerToken } = await service.joinSession(session.code, 'Player')
 
   await service.startSession(session.code)
   await service.skipPhase(session.code)
 
   const optionId = template.questions[0]!.correctOptionId
+  const requestId = randomUUID()
   const results = await Promise.allSettled([
-    service.submitAnswer(session.code, player.id, optionId),
-    service.submitAnswer(session.code, player.id, optionId),
+    service.submitAnswer(session.code, playerToken, optionId, requestId),
+    service.submitAnswer(session.code, playerToken, optionId, requestId),
     service.setPlayerConnection(session.code, player.id, false),
   ])
 
-  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 2)
-  assert.equal(results.filter((result) => result.status === 'rejected').length, 1)
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 3)
+  const answerResults = results.slice(0, 2).filter((result) => result.status === 'fulfilled')
+  assert.equal(answerResults.length, 2)
+  if (answerResults[0]?.status === 'fulfilled' && answerResults[1]?.status === 'fulfilled') {
+    assert.equal(answerResults[0].value.answer.id, answerResults[1].value.answer.id)
+  }
 
   const snapshot = await service.getSnapshotByCode(session.code)
   assert.ok(snapshot)
@@ -102,8 +110,8 @@ test('continues a question with its answers after the service restarts', async (
   await firstService.startSession(session.code)
   await firstService.skipPhase(session.code)
   await Promise.all(
-    players.slice(0, 20).map(({ player }) =>
-      firstService.submitAnswer(session.code, player.id, template.questions[0]!.correctOptionId)
+    players.slice(0, 20).map(({ playerToken }) =>
+      firstService.submitAnswer(session.code, playerToken, template.questions[0]!.correctOptionId, randomUUID())
     )
   )
 
@@ -120,8 +128,8 @@ test('continues a question with its answers after the service restarts', async (
   assert.equal(recovered.snapshot.session.phaseEndsAt, originalDeadline)
 
   await Promise.all(
-    players.slice(20).map(({ player }) =>
-      restartedService.submitAnswer(session.code, player.id, template.questions[0]!.correctOptionId)
+    players.slice(20).map(({ playerToken }) =>
+      restartedService.submitAnswer(session.code, playerToken, template.questions[0]!.correctOptionId, randomUUID())
     )
   )
   const completedQuestion = await restartedService.getSnapshotByCode(session.code)
@@ -143,8 +151,8 @@ test('persists all 50 concurrent joins and answers in SQLite', async () => {
   await service.startSession(session.code)
   await service.skipPhase(session.code)
   await Promise.all(
-    players.map(({ player }) =>
-      service.submitAnswer(session.code, player.id, template.questions[0]!.correctOptionId)
+    players.map(({ playerToken }) =>
+      service.submitAnswer(session.code, playerToken, template.questions[0]!.correctOptionId, randomUUID())
     )
   )
 
@@ -154,6 +162,35 @@ test('persists all 50 concurrent joins and answers in SQLite', async () => {
   assert.equal(persisted.answers.length, PLAYER_COUNT)
   assert.equal(new Set(persisted.answers.map((answer) => answer.playerId)).size, PLAYER_COUNT)
   assert.equal(persisted.status, 'show_answer')
+})
+
+test('rejects invalid player tokens and caps sessions at 50 players', async () => {
+  const repository = new CloningQuizRepository()
+  const template = makeTemplate(1)
+  await repository.createTemplate(template)
+  const service = new SessionService(repository)
+  const session = await service.createSession(template.id)
+  const players = await Promise.all(
+    Array.from({ length: PLAYER_COUNT }, (_, index) => service.joinSession(session.code, `Capacity ${index + 1}`))
+  )
+
+  await assert.rejects(() => service.joinSession(session.code, 'One too many'), /50 players maximum/)
+  await assert.rejects(
+    () => service.getAuthenticatedPlayerSession(session.code, 'invalid-token'),
+    /Player session is invalid/
+  )
+
+  const authenticated = await service.getAuthenticatedPlayerSession(session.code, players[0]!.playerToken)
+  assert.equal(authenticated.player.id, players[0]!.player.id)
+  assert.notEqual(authenticated.player.authTokenHash, players[0]!.playerToken)
+
+  await service.setPlayerConnection(session.code, players[1]!.player.id, false)
+  await assert.rejects(
+    () => service.connectPlayer(session.code, players[1]!.playerToken, players[0]!.player.id),
+    /Player session is invalid/
+  )
+  const afterIdentitySwitch = await service.getSnapshotByCode(session.code)
+  assert.equal(afterIdentitySwitch?.session.players[1]?.connected, false)
 })
 
 class CloningQuizRepository implements QuizRepository {

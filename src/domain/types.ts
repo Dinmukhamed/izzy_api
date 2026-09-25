@@ -54,10 +54,12 @@ export type Player = {
   score: number
   joinedAt: string
   connected: boolean
+  authTokenHash?: string | null
 }
 
 export type PlayerAnswer = {
   id: Id
+  requestId?: Id
   playerId: Id
   questionId: Id
   optionId: Id

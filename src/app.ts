@@ -8,17 +8,22 @@ import { SqliteQuizRepository } from './repositories/sqliteQuizRepository.js'
 import { seedDemoTemplate } from './seed/devSeed.js'
 import { SessionService } from './services/sessionService.js'
 import { TemplateService } from './services/templateService.js'
+import { RateLimiter } from './security/rateLimiter.js'
 
 export type AppConfig = {
   adminToken: string
   corsOrigins: string[]
   dataDir?: string
   publicBaseUrl?: string
+  logger?: boolean
 }
 
 export async function buildApp(config: AppConfig) {
   const app = Fastify({
-    logger: true,
+    logger: config.logger ?? true,
+    // Production traffic reaches the API through the local nginx instance.
+    // Trust only that hop so clients cannot evade IP limits with a forged header.
+    trustProxy: ['127.0.0.1', '::1'],
   })
 
   await app.register(cors, {
@@ -45,11 +50,14 @@ export async function buildApp(config: AppConfig) {
   const repository = new SqliteQuizRepository(join(dataDir, 'izzy.sqlite'))
   const templateService = new TemplateService(repository)
   const sessionService = new SessionService(repository)
+  const rateLimiter = new RateLimiter()
   const realtime = createRealtimeServer(app.server, {
     adminToken: config.adminToken,
     corsOrigins: config.corsOrigins,
     sessionService,
+    rateLimiter,
   })
+  app.addHook('preClose', async () => realtime.close())
 
   await registerRoutes(app, {
     adminToken: config.adminToken,
@@ -58,6 +66,7 @@ export async function buildApp(config: AppConfig) {
     uploadDir: join(dataDir, 'uploads'),
     publicBaseUrl: config.publicBaseUrl,
     notifySessionChange: realtime.emitSessionState,
+    rateLimiter,
   })
 
   const demoTemplate = await seedDemoTemplate(templateService)

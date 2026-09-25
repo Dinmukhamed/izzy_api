@@ -2,7 +2,10 @@ import { createReadStream } from 'node:fs'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { toHostSessionState, toPlayerSessionState } from '../domain/public.js'
+import { toHostSessionState, toPlayerSessionState, toPublicPlayer } from '../domain/public.js'
+import { PlayerAuthenticationError } from '../domain/errors.js'
+import type { RateLimiter } from '../security/rateLimiter.js'
+import { playerTokenFingerprint } from '../security/playerToken.js'
 import type { SessionService } from '../services/sessionService.js'
 import type { TemplateService } from '../services/templateService.js'
 import {
@@ -10,6 +13,7 @@ import {
   createSessionSchema,
   createTemplateSchema,
   joinSessionSchema,
+  playerTokenSchema,
   updateTemplateSchema,
   updateTemplateStatusSchema,
 } from '../validation/schemas.js'
@@ -23,6 +27,7 @@ type RouteDeps = {
   uploadDir: string
   publicBaseUrl?: string
   notifySessionChange?: (code: string) => Promise<void> | void
+  rateLimiter: RateLimiter
 }
 
 export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
@@ -280,6 +285,17 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
     }
   })
 
+  app.post('/admin/sessions/:code/players/:playerId/revoke', { preHandler: adminGuard }, async (request, reply) => {
+    try {
+      const { code, playerId } = request.params as { code: string; playerId: string }
+      const snapshot = await deps.sessionService.revokePlayerAccess(code, playerId)
+      await notify(code)
+      return toHostSessionState(snapshot.template, snapshot.session)
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
   app.get('/sessions/:code', async (request, reply) => {
     const { code } = request.params as { code: string }
     try {
@@ -294,14 +310,39 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
   app.post('/sessions/:code/join', async (request, reply) => {
     try {
       const { code } = request.params as { code: string }
+      const normalizedCode = code.trim().toUpperCase()
+      deps.rateLimiter.consume(
+        { bucket: 'join-ip-code', key: `${request.ip}:${normalizedCode}`, limit: 75, windowMs: 5 * 60_000 },
+        { bucket: 'join-ip-global', key: request.ip, limit: 200, windowMs: 5 * 60_000 },
+        { bucket: 'join-code', key: normalizedCode, limit: 100, windowMs: 5 * 60_000 }
+      )
       const input = joinSessionSchema.parse(request.body)
-      const { snapshot, player } = await deps.sessionService.joinSession(code, input.name)
+      const { snapshot, player, playerToken } = await deps.sessionService.joinSession(code, input.name)
       await notify(code)
 
       return reply.code(201).send({
-        player,
+        player: toPublicPlayer(player),
+        playerToken,
         state: toPlayerSessionState(snapshot.template, snapshot.session),
       })
+    } catch (error) {
+      return sendError(reply, error)
+    }
+  })
+
+  app.get('/sessions/:code/player', async (request, reply) => {
+    try {
+      const { code } = request.params as { code: string }
+      const normalizedCode = code.trim().toUpperCase()
+      deps.rateLimiter.consume({ bucket: 'state-ip-code', key: `${request.ip}:${normalizedCode}`, limit: 600, windowMs: 60_000 })
+      const playerToken = getPlayerToken(request.headers.authorization)
+      deps.rateLimiter.consume({ bucket: 'state-token', key: playerTokenFingerprint(playerToken), limit: 60, windowMs: 60_000 })
+      const { snapshot, player, changed } = await deps.sessionService.getAuthenticatedPlayerSession(code, playerToken)
+      if (changed) await notify(code)
+      return {
+        player: toPublicPlayer(player),
+        state: toPlayerSessionState(snapshot.template, snapshot.session),
+      }
     } catch (error) {
       return sendError(reply, error)
     }
@@ -310,13 +351,29 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
   app.post('/sessions/:code/answer', async (request, reply) => {
     try {
       const { code } = request.params as { code: string }
+      const normalizedCode = code.trim().toUpperCase()
+      deps.rateLimiter.consume({ bucket: 'answer-ip-code', key: `${request.ip}:${normalizedCode}`, limit: 400, windowMs: 60_000 })
       const input = answerSchema.parse(request.body)
-      const { answer } = await deps.sessionService.submitAnswer(code, input.playerId, input.optionId)
-      await notify(code)
+      const playerToken = getPlayerToken(request.headers.authorization)
+      deps.rateLimiter.consume({ bucket: 'answer-token', key: playerTokenFingerprint(playerToken), limit: 30, windowMs: 60_000 })
+      const { answer, duplicate } = await deps.sessionService.submitAnswer(
+        code,
+        playerToken,
+        input.optionId,
+        input.requestId
+      )
+      if (!duplicate) await notify(code)
 
-      return reply.code(201).send({ answer })
+      return reply.code(duplicate ? 200 : 201).send({ answer, duplicate })
     } catch (error) {
       return sendError(reply, error)
     }
   })
+}
+
+function getPlayerToken(authorization: string | undefined) {
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : ''
+  const parsed = playerTokenSchema.safeParse(token)
+  if (!parsed.success) throw new PlayerAuthenticationError()
+  return parsed.data
 }

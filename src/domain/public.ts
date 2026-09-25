@@ -1,4 +1,4 @@
-import type { GameTemplate, LiveSession, PlayerAnswer, PublicQuestion, Question } from './types.js'
+import type { GameTemplate, LiveSession, Player, PlayerAnswer, PublicQuestion, Question } from './types.js'
 import { LIVE_QUESTION_DURATION_MS } from './constants.js'
 
 export function toPublicQuestion(question: Question, revealAnswer = false): PublicQuestion {
@@ -15,6 +15,15 @@ export function getCurrentQuestion(template: GameTemplate, session: LiveSession)
   return template.questions[session.currentQuestionIndex] || null
 }
 
+export function toPublicPlayer(player: Player) {
+  return {
+    id: player.id,
+    name: player.name,
+    score: player.score,
+    connected: player.connected,
+  }
+}
+
 export function toPlayerSessionState(template: GameTemplate, session: LiveSession) {
   const currentQuestion = getCurrentQuestion(template, session)
   const revealAnswer = ['show_answer', 'leaderboard', 'finished'].includes(session.status)
@@ -28,12 +37,7 @@ export function toPlayerSessionState(template: GameTemplate, session: LiveSessio
     code: session.code,
     templateTitle: template.title,
     status: session.status,
-    players: session.players.map((player) => ({
-      id: player.id,
-      name: player.name,
-      score: player.score,
-      connected: player.connected,
-    })),
+    players: session.players.map(toPublicPlayer),
     currentQuestion: currentQuestion ? toPublicQuestion(currentQuestion, revealAnswer) : null,
     currentQuestionIndex: session.currentQuestionIndex,
     questionCount: template.questions.length,
@@ -51,6 +55,10 @@ export function toHostSessionState(template: GameTemplate, session: LiveSession)
 
   return {
     ...toPlayerSessionState(template, session),
+    players: session.players.map((player) => ({
+      ...toPublicPlayer(player),
+      accessRevoked: !player.authTokenHash,
+    })),
     template,
     currentQuestion: currentQuestion ? toPublicQuestion(currentQuestion, true) : null,
     answers: session.answers,

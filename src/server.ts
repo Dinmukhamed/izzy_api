@@ -20,6 +20,14 @@ const { app, demoTemplate } = await buildApp({
   publicBaseUrl,
 })
 
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, async () => {
+    app.log.info({ signal }, 'Shutting down Izzy API')
+    await app.close()
+    process.exit(0)
+  })
+}
+
 try {
   await app.listen({ port, host })
   app.log.info({ templateId: demoTemplate.id }, 'Izzy API is ready')

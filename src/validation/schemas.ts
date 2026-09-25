@@ -1,16 +1,18 @@
 import { z } from 'zod'
 
+export const gameCodeSchema = z.string().trim().min(4).max(12).transform((value) => value.toUpperCase())
+
 export const answerOptionSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().trim().min(1).max(180),
 })
 
 export const questionSchema = z.object({
   kind: z.enum(['text', 'image', 'audio']).default('text'),
-  text: z.string().min(1),
+  text: z.string().trim().min(1).max(500),
   media: z
     .object({
       type: z.enum(['image', 'audio']),
-      url: z.string().min(1),
+      url: z.string().trim().min(1).max(2048),
     })
     .optional(),
   options: z.array(answerOptionSchema).length(4, 'A question must have exactly four answers'),
@@ -20,9 +22,9 @@ export const questionSchema = z.object({
 })
 
 export const createTemplateSchema = z.object({
-  title: z.string().min(1),
+  title: z.string().trim().min(1).max(120),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
-  questions: z.array(questionSchema).min(1),
+  questions: z.array(questionSchema).min(1).max(100),
 })
 
 export const updateTemplateSchema = createTemplateSchema
@@ -36,10 +38,12 @@ export const createSessionSchema = z.object({
 })
 
 export const joinSessionSchema = z.object({
-  name: z.string().min(1).max(32),
+  name: z.string().trim().min(2).max(32),
 })
 
 export const answerSchema = z.object({
-  playerId: z.string().min(1),
   optionId: z.string().min(1),
+  requestId: z.string().uuid(),
 })
+
+export const playerTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)

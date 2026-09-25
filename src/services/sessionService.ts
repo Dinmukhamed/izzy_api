@@ -3,7 +3,9 @@ import {
   LIVE_COUNTDOWN_DURATION_MS,
   LIVE_LEADERBOARD_DURATION_MS,
   LIVE_QUESTION_DURATION_MS,
+  MAX_PLAYERS_PER_SESSION,
 } from '../domain/constants.js'
+import { AppError, PlayerAuthenticationError } from '../domain/errors.js'
 import { getCurrentQuestion } from '../domain/public.js'
 import { calculateAnswerScore } from '../domain/scoring.js'
 import type {
@@ -15,6 +17,7 @@ import type {
   TimedSessionStatus,
 } from '../domain/types.js'
 import type { QuizRepository } from '../repositories/quizRepository.js'
+import { createPlayerToken, hashPlayerToken, playerTokenMatches } from '../security/playerToken.js'
 import { createGameCode, createId } from '../utils/id.js'
 
 const TIMED_STATUSES: TimedSessionStatus[] = ['countdown', 'question_open', 'show_answer', 'leaderboard']
@@ -127,6 +130,9 @@ export class SessionService {
     const { session } = snapshot
 
     if (session.status !== 'lobby_open') throw new Error('Lobby is not open')
+    if (session.players.length >= MAX_PLAYERS_PER_SESSION) {
+      throw new AppError(`The game is full (${MAX_PLAYERS_PER_SESSION} players maximum)`, 409)
+    }
 
     const normalizedName = name.trim()
     const nameExists = session.players.some(
@@ -134,18 +140,53 @@ export class SessionService {
     )
     if (nameExists) throw new Error('Player name already exists')
 
+    const playerToken = createPlayerToken()
     const player: Player = {
       id: createId(),
       name: normalizedName,
       score: 0,
       joinedAt: new Date().toISOString(),
       connected: true,
+      authTokenHash: hashPlayerToken(playerToken),
     }
 
     session.players.push(player)
     await this.touch(session)
 
-    return { snapshot, player }
+    return { snapshot, player, playerToken }
+  }
+
+  async getAuthenticatedPlayerSession(code: string, playerToken: string) {
+    return this.withSessionLock(code, async () => {
+      const { snapshot, changed } = await this.advanceTimedPhasesUnlocked(code)
+      const player = this.requireAuthenticatedPlayer(snapshot.session, playerToken)
+      return { snapshot, player, changed }
+    })
+  }
+
+  async connectPlayer(code: string, playerToken: string, expectedPlayerId?: string) {
+    return this.withSessionLock(code, async () => {
+      const { snapshot } = await this.advanceTimedPhasesUnlocked(code)
+      const player = this.requireAuthenticatedPlayer(snapshot.session, playerToken)
+      if (expectedPlayerId && player.id !== expectedPlayerId) throw new PlayerAuthenticationError()
+      if (!player.connected) {
+        player.connected = true
+        await this.touch(snapshot.session)
+      }
+      return { snapshot, player }
+    })
+  }
+
+  async revokePlayerAccess(code: string, playerId: string) {
+    return this.withSessionLock(code, async () => {
+      const snapshot = await this.requireSnapshotUnlocked(code)
+      const player = snapshot.session.players.find((candidate) => candidate.id === playerId)
+      if (!player) throw new Error('Player not found')
+      player.authTokenHash = null
+      player.connected = false
+      await this.touch(snapshot.session)
+      return snapshot
+    })
   }
 
   async setPlayerConnection(code: string, playerId: string, connected: boolean) {
@@ -365,28 +406,49 @@ export class SessionService {
     return { snapshot, changed }
   }
 
-  async submitAnswer(code: string, playerId: string, optionId: string) {
-    return this.withSessionLock(code, () => this.submitAnswerUnlocked(code, playerId, optionId))
+  async submitAnswer(
+    code: string,
+    playerToken: string,
+    optionId: string,
+    requestId: string,
+    expectedPlayerId?: string
+  ) {
+    return this.withSessionLock(code, () =>
+      this.submitAnswerUnlocked(code, playerToken, optionId, requestId, expectedPlayerId)
+    )
   }
 
-  private async submitAnswerUnlocked(code: string, playerId: string, optionId: string) {
+  private async submitAnswerUnlocked(
+    code: string,
+    playerToken: string,
+    optionId: string,
+    requestId: string,
+    expectedPlayerId?: string
+  ) {
     const { snapshot } = await this.advanceTimedPhasesUnlocked(code)
     const { session, template } = snapshot
+    const player = this.requireAuthenticatedPlayer(session, playerToken)
+    if (expectedPlayerId && player.id !== expectedPlayerId) throw new PlayerAuthenticationError()
+
+    const requestAnswer = session.answers.find((answer) => answer.requestId === requestId)
+    if (requestAnswer) {
+      if (requestAnswer.playerId !== player.id || requestAnswer.optionId !== optionId) {
+        throw new AppError('Answer request conflicts with an earlier request', 409)
+      }
+      return { snapshot, answer: requestAnswer, duplicate: true }
+    }
 
     if (session.status !== 'question_open') throw new Error('Question is not open')
     if (!session.phaseEndsAt || dateMs(session.phaseEndsAt) <= Date.now()) throw new Error('Time is up')
-
-    const player = session.players.find((candidate) => candidate.id === playerId)
-    if (!player) throw new Error('Player not found')
 
     const question = getCurrentQuestion(template, session)
     if (!question) throw new Error('Question not found')
     if (!question.options.some((option) => option.id === optionId)) throw new Error('Answer option not found')
 
-    const alreadyAnswered = session.answers.some(
-      (answer) => answer.playerId === playerId && answer.questionId === question.id
+    const alreadyAnswered = session.answers.find(
+      (answer) => answer.playerId === player.id && answer.questionId === question.id
     )
-    if (alreadyAnswered) throw new Error('Player already answered')
+    if (alreadyAnswered) return { snapshot, answer: alreadyAnswered, duplicate: true }
 
     const answeredAtMs = Date.now()
     const remainingMs = Math.max(0, dateMs(session.phaseEndsAt) - answeredAtMs)
@@ -401,7 +463,8 @@ export class SessionService {
 
     const answer: PlayerAnswer = {
       id: createId(),
-      playerId,
+      requestId,
+      playerId: player.id,
       questionId: question.id,
       optionId,
       isCorrect,
@@ -426,7 +489,7 @@ export class SessionService {
     }
 
     await this.touch(session)
-    return { snapshot, answer }
+    return { snapshot, answer, duplicate: false }
   }
 
   private advanceOnePhase(snapshot: SessionSnapshot, transitionAt: number) {
@@ -506,6 +569,12 @@ export class SessionService {
     const snapshot = await this.getSnapshotByCodeUnlocked(code)
     if (!snapshot) throw new Error('Session not found')
     return snapshot
+  }
+
+  private requireAuthenticatedPlayer(session: LiveSession, playerToken: string) {
+    const player = session.players.find((candidate) => playerTokenMatches(playerToken, candidate.authTokenHash))
+    if (!player) throw new PlayerAuthenticationError()
+    return player
   }
 
   private async withSessionLock<T>(code: string, action: () => Promise<T>): Promise<T> {
