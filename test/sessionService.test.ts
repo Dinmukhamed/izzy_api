@@ -34,7 +34,7 @@ test('keeps every answer when 50 players answer concurrently through a full game
     assert.equal(beforeAnswers.session.status, 'question_open')
     assert.equal(beforeAnswers.session.questionPlayerIds?.length, PLAYER_COUNT)
 
-    const question = template.questions[questionIndex]
+    const question = beforeAnswers.template.questions[questionIndex]
     assert.ok(question)
     await Promise.all(
       joins.map(({ playerToken }) =>
@@ -109,9 +109,12 @@ test('continues a question with its answers after the service restarts', async (
 
   await firstService.startSession(session.code)
   await firstService.skipPhase(session.code)
+  const openedQuestion = await firstService.getSnapshotByCode(session.code)
+  assert.ok(openedQuestion)
+  const correctOptionId = openedQuestion.template.questions[0]!.correctOptionId
   await Promise.all(
     players.slice(0, 20).map(({ playerToken }) =>
-      firstService.submitAnswer(session.code, playerToken, template.questions[0]!.correctOptionId, randomUUID())
+      firstService.submitAnswer(session.code, playerToken, correctOptionId, randomUUID())
     )
   )
 
@@ -129,7 +132,7 @@ test('continues a question with its answers after the service restarts', async (
 
   await Promise.all(
     players.slice(20).map(({ playerToken }) =>
-      restartedService.submitAnswer(session.code, playerToken, template.questions[0]!.correctOptionId, randomUUID())
+      restartedService.submitAnswer(session.code, playerToken, correctOptionId, randomUUID())
     )
   )
   const completedQuestion = await restartedService.getSnapshotByCode(session.code)
@@ -191,6 +194,47 @@ test('rejects invalid player tokens and caps sessions at 50 players', async () =
   )
   const afterIdentitySwitch = await service.getSnapshotByCode(session.code)
   assert.equal(afterIdentitySwitch?.session.players[1]?.connected, false)
+})
+
+test('shuffles questions and answer options once per live session without changing the template', async () => {
+  const repository = new CloningQuizRepository()
+  const template = makeTemplate(3)
+  await repository.createTemplate(template)
+  const service = new SessionService(repository, () => 0)
+
+  const session = await service.createSession(template.id)
+  const snapshot = await service.getSnapshotByCode(session.code)
+  const sourceTemplate = await repository.getTemplate(template.id)
+
+  assert.ok(snapshot)
+  assert.ok(sourceTemplate)
+  assert.deepEqual(
+    snapshot.template.questions.map((question) => question.id),
+    ['question-1', 'question-2', 'question-0']
+  )
+  assert.deepEqual(
+    snapshot.template.questions[0]?.options.map((option) => option.id),
+    [
+      'question-1-option-1',
+      'question-1-option-2',
+      'question-1-option-3',
+      'question-1-option-0',
+    ]
+  )
+  assert.equal(snapshot.template.questions[0]?.correctOptionId, 'question-1-option-0')
+  assert.deepEqual(
+    sourceTemplate.questions.map((question) => question.id),
+    ['question-0', 'question-1', 'question-2']
+  )
+  assert.deepEqual(
+    sourceTemplate.questions[0]?.options.map((option) => option.id),
+    [
+      'question-0-option-0',
+      'question-0-option-1',
+      'question-0-option-2',
+      'question-0-option-3',
+    ]
+  )
 })
 
 class CloningQuizRepository implements QuizRepository {

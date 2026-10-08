@@ -25,7 +25,10 @@ const TIMED_STATUSES: TimedSessionStatus[] = ['countdown', 'question_open', 'sho
 export class SessionService {
   private readonly sessionQueues = new Map<string, Promise<void>>()
 
-  constructor(private readonly repository: QuizRepository) {}
+  constructor(
+    private readonly repository: QuizRepository,
+    private readonly random: () => number = Math.random
+  ) {}
 
   async createSession(templateId: string) {
     const template = await this.repository.getTemplate(templateId)
@@ -37,7 +40,7 @@ export class SessionService {
       id: createId(),
       code: await this.createUniqueCode(),
       templateId,
-      templateSnapshot: cloneTemplate(template),
+      templateSnapshot: createShuffledTemplateSnapshot(template, this.random),
       status: 'lobby_open',
       players: [],
       answers: [],
@@ -607,6 +610,24 @@ export class SessionService {
 
 function cloneTemplate(template: SessionSnapshot['template']) {
   return JSON.parse(JSON.stringify(template)) as SessionSnapshot['template']
+}
+
+function createShuffledTemplateSnapshot(template: SessionSnapshot['template'], random: () => number) {
+  const snapshot = cloneTemplate(template)
+  shuffleInPlace(snapshot.questions, random)
+
+  for (const question of snapshot.questions) {
+    shuffleInPlace(question.options, random)
+  }
+
+  return snapshot
+}
+
+function shuffleInPlace<T>(items: T[], random: () => number) {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(random() * (index + 1))
+    ;[items[index], items[randomIndex]] = [items[randomIndex]!, items[index]!]
+  }
 }
 
 function isTimedStatus(status: SessionStatus): status is TimedSessionStatus {
