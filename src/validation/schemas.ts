@@ -8,7 +8,7 @@ export const answerOptionSchema = z.object({
 
 export const questionSchema = z.object({
   kind: z.enum(['text', 'image', 'audio']).default('text'),
-  text: z.string().trim().min(1).max(500),
+  text: z.string().trim().min(1).max(300),
   media: z
     .object({
       type: z.enum(['image', 'audio']),

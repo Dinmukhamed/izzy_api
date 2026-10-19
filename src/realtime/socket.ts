@@ -1,6 +1,11 @@
 import type { Server as HttpServer } from 'node:http'
 import { Server, type Socket } from 'socket.io'
-import { toHostSessionState, toPlayerSessionState, toPublicPlayer } from '../domain/public.js'
+import {
+  toAuthenticatedPlayerState,
+  toHostSessionState,
+  toPlayerAnswerReceipt,
+  toPlayerSessionState,
+} from '../domain/public.js'
 import { PlayerAuthenticationError } from '../domain/errors.js'
 import type { SessionSnapshot } from '../domain/types.js'
 import { getClientAddress } from '../security/clientAddress.js'
@@ -127,10 +132,7 @@ export function createRealtimeServer(httpServer: HttpServer, deps: RealtimeDeps)
         await socket.join(sessionRoom(code))
         await emitSessionState(code)
 
-        return {
-          player: toPublicPlayer(player),
-          state: toPlayerSessionState(snapshot.template, snapshot.session),
-        }
+        return toAuthenticatedPlayerState(snapshot.template, snapshot.session, player)
       })
     })
 
@@ -158,7 +160,7 @@ export function createRealtimeServer(httpServer: HttpServer, deps: RealtimeDeps)
           authenticatedPlayerId
         )
         if (!duplicate) await emitSessionState(code)
-        return { answer, duplicate }
+        return { answer: toPlayerAnswerReceipt(answer), duplicate }
       })
     })
 

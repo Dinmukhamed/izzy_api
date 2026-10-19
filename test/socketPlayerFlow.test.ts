@@ -80,6 +80,9 @@ test('50 authenticated Socket.IO players answer concurrently without duplicates'
   )
   assert.ok(answerResponses.every((response) => response.ok))
   assert.ok(answerResponses.every((response) => !response.ok || response.data.duplicate === false))
+  assert.ok(answerResponses.every((response) => !response.ok || !('isCorrect' in response.data.answer)))
+  assert.ok(answerResponses.every((response) => !response.ok || !('score' in response.data.answer)))
+  assert.ok(answerResponses.every((response) => !response.ok || !('elapsedMs' in response.data.answer)))
 
   const repeated = await emitAck(clients[0]!, 'player:answer', {
     code: session.code,

@@ -2,7 +2,12 @@ import { createReadStream } from 'node:fs'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { toHostSessionState, toPlayerSessionState, toPublicPlayer } from '../domain/public.js'
+import {
+  toAuthenticatedPlayerState,
+  toHostSessionState,
+  toPlayerAnswerReceipt,
+  toPlayerSessionState,
+} from '../domain/public.js'
 import { PlayerAuthenticationError } from '../domain/errors.js'
 import type { RateLimiter } from '../security/rateLimiter.js'
 import { playerTokenFingerprint } from '../security/playerToken.js'
@@ -321,9 +326,8 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
       await notify(code)
 
       return reply.code(201).send({
-        player: toPublicPlayer(player),
+        ...toAuthenticatedPlayerState(snapshot.template, snapshot.session, player),
         playerToken,
-        state: toPlayerSessionState(snapshot.template, snapshot.session),
       })
     } catch (error) {
       return sendError(reply, error)
@@ -339,10 +343,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
       deps.rateLimiter.consume({ bucket: 'state-token', key: playerTokenFingerprint(playerToken), limit: 60, windowMs: 60_000 })
       const { snapshot, player, changed } = await deps.sessionService.getAuthenticatedPlayerSession(code, playerToken)
       if (changed) await notify(code)
-      return {
-        player: toPublicPlayer(player),
-        state: toPlayerSessionState(snapshot.template, snapshot.session),
-      }
+      return toAuthenticatedPlayerState(snapshot.template, snapshot.session, player)
     } catch (error) {
       return sendError(reply, error)
     }
@@ -364,7 +365,10 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
       )
       if (!duplicate) await notify(code)
 
-      return reply.code(duplicate ? 200 : 201).send({ answer, duplicate })
+      return reply.code(duplicate ? 200 : 201).send({
+        answer: toPlayerAnswerReceipt(answer),
+        duplicate,
+      })
     } catch (error) {
       return sendError(reply, error)
     }

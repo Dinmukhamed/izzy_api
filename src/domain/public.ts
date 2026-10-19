@@ -26,18 +26,29 @@ export function toPublicPlayer(player: Player) {
 
 export function toPlayerSessionState(template: GameTemplate, session: LiveSession) {
   const currentQuestion = getCurrentQuestion(template, session)
-  const revealAnswer = ['show_answer', 'leaderboard', 'finished'].includes(session.status)
+  const revealAnswer = shouldRevealAnswer(session)
   const answeredPlayerIds = currentQuestion
     ? session.answers
         .filter((answer) => answer.questionId === currentQuestion.id)
         .map((answer) => answer.playerId)
     : []
+  const hiddenScores = !revealAnswer && currentQuestion
+    ? session.answers
+        .filter((answer) => answer.questionId === currentQuestion.id)
+        .reduce((scores, answer) => {
+          scores.set(answer.playerId, (scores.get(answer.playerId) || 0) + answer.score)
+          return scores
+        }, new Map<string, number>())
+    : new Map<string, number>()
 
   return {
     code: session.code,
     templateTitle: template.title,
     status: session.status,
-    players: session.players.map(toPublicPlayer),
+    players: session.players.map((player) => ({
+      ...toPublicPlayer(player),
+      score: Math.max(0, player.score - (hiddenScores.get(player.id) || 0)),
+    })),
     currentQuestion: currentQuestion ? toPublicQuestion(currentQuestion, revealAnswer) : null,
     currentQuestionIndex: session.currentQuestionIndex,
     questionCount: template.questions.length,
@@ -47,6 +58,23 @@ export function toPlayerSessionState(template: GameTemplate, session: LiveSessio
     stateVersion: session.stateVersion || 0,
     answeredPlayerIds,
     answers: revealAnswer ? toPublicAnswers(session.answers) : [],
+  }
+}
+
+export function toAuthenticatedPlayerState(template: GameTemplate, session: LiveSession, player: Player) {
+  const state = toPlayerSessionState(template, session)
+  const publicPlayer = state.players.find((candidate) => candidate.id === player.id) || toPublicPlayer(player)
+
+  return { player: publicPlayer, state }
+}
+
+export function toPlayerAnswerReceipt(answer: PlayerAnswer) {
+  return {
+    id: answer.id,
+    requestId: answer.requestId,
+    questionId: answer.questionId,
+    optionId: answer.optionId,
+    answeredAt: answer.answeredAt,
   }
 }
 
@@ -75,4 +103,10 @@ function toPublicAnswers(answers: PlayerAnswer[]) {
     score: answer.score,
     elapsedMs: answer.elapsedMs,
   }))
+}
+
+function shouldRevealAnswer(session: LiveSession) {
+  if (['show_answer', 'leaderboard', 'finished'].includes(session.status)) return true
+
+  return session.status === 'paused' && ['show_answer', 'leaderboard'].includes(session.pausedPhase || '')
 }
