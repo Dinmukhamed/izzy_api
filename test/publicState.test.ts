@@ -10,8 +10,9 @@ const template: GameTemplate = {
   questions: [
     {
       id: 'question-1',
-      kind: 'text',
+      kind: 'image',
       text: 'Previous question',
+      media: { type: 'image', url: 'https://example.test/uploads/question-1.webp' },
       options: [{ id: 'q1-a', text: 'A' }, { id: 'q1-b', text: 'B' }, { id: 'q1-c', text: 'C' }, { id: 'q1-d', text: 'D' }],
       correctOptionId: 'q1-a',
       durationMs: 20_000,
@@ -19,8 +20,9 @@ const template: GameTemplate = {
     },
     {
       id: 'question-2',
-      kind: 'text',
+      kind: 'image',
       text: 'Current question',
+      media: { type: 'image', url: 'https://example.test/uploads/question-1.webp' },
       options: [{ id: 'q2-a', text: 'A' }, { id: 'q2-b', text: 'B' }, { id: 'q2-c', text: 'C' }, { id: 'q2-d', text: 'D' }],
       correctOptionId: 'q2-b',
       durationMs: 20_000,
@@ -66,6 +68,7 @@ test('hides current-question results and score changes in every unrevealed phase
     assert.equal(state.players.find((player) => player.id === 'player-2')?.score, 400)
     assert.equal(state.currentQuestion?.correctOptionId, undefined)
     assert.deepEqual(state.answers, [])
+    assert.deepEqual(state.preloadImageUrls, ['https://example.test/uploads/question-1.webp'])
   }
 })
 

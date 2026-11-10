@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import {
@@ -34,6 +35,19 @@ type RouteDeps = {
   notifySessionChange?: (code: string) => Promise<void> | void
   rateLimiter: RateLimiter
 }
+
+const uploadExtensions = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/webp', '.webp'],
+  ['audio/mpeg', '.mp3'],
+  ['audio/mp4', '.m4a'],
+  ['audio/ogg', '.ogg'],
+])
+const uploadContentTypes = new Map(
+  Array.from(uploadExtensions, ([contentType, extension]) => [extension, contentType]),
+)
+const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
 
 export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
   const adminGuard = createAdminGuard(deps.adminToken)
@@ -106,14 +120,17 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
       const file = await request.file()
       if (!file) return reply.code(400).send({ error: 'File is required' })
 
-      const fileExtension = extname(file.filename)
-      const safeBaseName = basename(file.filename, fileExtension)
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 48) || 'media'
-      const fileName = `${Date.now()}-${safeBaseName}${fileExtension}`
+      const fileExtension = uploadExtensions.get(file.mimetype)
+      if (!fileExtension) {
+        return reply.code(415).send({ error: 'Supported formats: JPG, PNG, WebP, MP3, M4A, OGG' })
+      }
+
       const fileBuffer = await file.toBuffer()
+      if (file.mimetype.startsWith('image/') && fileBuffer.length > MAX_IMAGE_UPLOAD_BYTES) {
+        return reply.code(413).send({ error: 'Image must be 10 MB or smaller' })
+      }
+
+      const fileName = `${randomUUID()}${fileExtension}`
 
       await mkdir(deps.uploadDir, { recursive: true })
       await writeFile(join(deps.uploadDir, fileName), fileBuffer)
@@ -140,6 +157,10 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps) {
     try {
       const fileStat = await stat(filePath)
       if (!fileStat.isFile()) return reply.code(404).send({ error: 'File not found' })
+
+      const contentType = uploadContentTypes.get(extname(safeFileName).toLowerCase())
+      if (contentType) reply.type(contentType)
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable')
 
       return reply.send(createReadStream(filePath))
     } catch {

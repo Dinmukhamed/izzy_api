@@ -27,6 +27,11 @@ export function toPublicPlayer(player: Player) {
 export function toPlayerSessionState(template: GameTemplate, session: LiveSession) {
   const currentQuestion = getCurrentQuestion(template, session)
   const revealAnswer = shouldRevealAnswer(session)
+  const preloadImageUrls = Array.from(new Set(
+    template.questions
+      .filter((question) => question.media?.type === 'image')
+      .map((question) => question.media!.url),
+  ))
   const answeredPlayerIds = currentQuestion
     ? session.answers
         .filter((answer) => answer.questionId === currentQuestion.id)
@@ -52,6 +57,7 @@ export function toPlayerSessionState(template: GameTemplate, session: LiveSessio
     currentQuestion: currentQuestion ? toPublicQuestion(currentQuestion, revealAnswer) : null,
     currentQuestionIndex: session.currentQuestionIndex,
     questionCount: template.questions.length,
+    preloadImageUrls,
     questionStartedAt: session.questionStartedAt,
     phaseEndsAt: session.phaseEndsAt || null,
     serverNow: new Date().toISOString(),
