@@ -24,6 +24,7 @@ export const questionSchema = z.object({
 export const createTemplateSchema = z.object({
   title: z.string().trim().min(1).max(120),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
+  shuffleQuestions: z.boolean().default(true),
   questions: z.array(questionSchema).min(1).max(100),
 })
 

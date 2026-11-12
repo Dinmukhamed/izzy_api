@@ -7,6 +7,7 @@ export async function seedDemoTemplate(templateService: TemplateService) {
   return templateService.createTemplate({
     title: 'Izzy Quiz Demo',
     status: 'active',
+    shuffleQuestions: true,
     questions: [
       {
         kind: 'text',

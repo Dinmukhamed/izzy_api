@@ -66,6 +66,7 @@ export class TemplateService {
       id,
       title: input.title,
       status: input.status,
+      shuffleQuestions: input.shuffleQuestions,
       questions: input.questions.map((questionInput) => {
         const options = questionInput.options.map((optionInput) => ({
           id: createId(),

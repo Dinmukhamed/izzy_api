@@ -43,6 +43,7 @@ export type GameTemplate = {
   id: Id
   title: string
   status: GameTemplateStatus
+  shuffleQuestions?: boolean
   questions: Question[]
   createdAt: string
   updatedAt: string

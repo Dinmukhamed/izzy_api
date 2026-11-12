@@ -237,6 +237,33 @@ test('shuffles questions and answer options once per live session without changi
   )
 })
 
+test('keeps template question order when question shuffling is disabled and still shuffles answers', async () => {
+  const repository = new CloningQuizRepository()
+  const template = makeTemplate(3)
+  template.shuffleQuestions = false
+  await repository.createTemplate(template)
+  const service = new SessionService(repository, () => 0)
+
+  const session = await service.createSession(template.id)
+  const snapshot = await service.getSnapshotByCode(session.code)
+
+  assert.ok(snapshot)
+  assert.deepEqual(
+    snapshot.template.questions.map((question) => question.id),
+    ['question-0', 'question-1', 'question-2']
+  )
+  assert.deepEqual(
+    snapshot.template.questions[0]?.options.map((option) => option.id),
+    [
+      'question-0-option-1',
+      'question-0-option-2',
+      'question-0-option-3',
+      'question-0-option-0',
+    ]
+  )
+  assert.equal(snapshot.template.questions[0]?.correctOptionId, 'question-0-option-0')
+})
+
 class CloningQuizRepository implements QuizRepository {
   private readonly templates = new Map<string, GameTemplate>()
   private readonly sessions = new Map<string, LiveSession>()

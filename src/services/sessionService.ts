@@ -40,7 +40,7 @@ export class SessionService {
       id: createId(),
       code: await this.createUniqueCode(),
       templateId,
-      templateSnapshot: createShuffledTemplateSnapshot(template, this.random),
+      templateSnapshot: createSessionTemplateSnapshot(template, this.random),
       status: 'lobby_open',
       players: [],
       answers: [],
@@ -612,9 +612,9 @@ function cloneTemplate(template: SessionSnapshot['template']) {
   return JSON.parse(JSON.stringify(template)) as SessionSnapshot['template']
 }
 
-function createShuffledTemplateSnapshot(template: SessionSnapshot['template'], random: () => number) {
+function createSessionTemplateSnapshot(template: SessionSnapshot['template'], random: () => number) {
   const snapshot = cloneTemplate(template)
-  shuffleInPlace(snapshot.questions, random)
+  if (snapshot.shuffleQuestions !== false) shuffleInPlace(snapshot.questions, random)
 
   for (const question of snapshot.questions) {
     shuffleInPlace(question.options, random)
